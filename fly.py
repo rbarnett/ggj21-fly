@@ -18,6 +18,7 @@ from cocos.director import director
 import cocos.collision_model as cm
 import cocos.euclid as eu
 import cocos.actions as ac
+from cocos import draw
     
 consts = {
     "window": {
@@ -176,9 +177,6 @@ class Worldview(cocos.layer.Layer):
         self.pics = pics
 
         cell_size = self.rPlayer * self.wall_scale_max * 2.0 * 1.25
-        self.collman = cm.CollisionManagerGrid(0.0, self.width,
-                                               0.0, self.height,
-                                               cell_size, cell_size)
 
         self.bindings = world['bindings']
         buttons = {}
@@ -187,7 +185,6 @@ class Worldview(cocos.layer.Layer):
         self.buttons = buttons
         self.upButtonReleased = True
 
-        self.toRemove = set()
         self.schedule(self.update)
         self.ladder_begin()
         
@@ -219,6 +216,7 @@ class Worldview(cocos.layer.Layer):
         
         for child in self.get_children():
             if child.btype == "pad":
+                child.stop()
                 child.do(ac.FadeOut(1))
                 
         self.do(ac.Delay(15) + ac.CallFunc(self.ladder_begin))
@@ -245,11 +243,14 @@ class Worldview(cocos.layer.Layer):
         self.player = None
         self.gate = None
         self.pad_cnt = 0
-        self.toRemove.clear()
         
         self.specialPads = []
         self.specialPadMessageDecay = 0.0
         self.backgroundLabelCount = 0
+        
+        self.swipeDecay = 0.0
+        self.swipeAngle = 0.0
+        self.swipePads = []
         
         self.compliments = [
             "You are superb",
@@ -324,10 +325,10 @@ class Worldview(cocos.layer.Layer):
             nextPoint = self.rotatePoint(startPoint, origin, (360 / numInCircle) * (i+1))
             pad = Actor(nextPoint.x, nextPoint.y, padSize, 'pad', self.pics['pad'])
             self.add(pad, z=100)
-            self.collman.add(pad)
             pad.disabled = False
             pad.special = False
             pad.specialTriggered = False
+            pad.spinning = False
             pads.append(pad)
             
         return pads
@@ -340,9 +341,7 @@ class Worldview(cocos.layer.Layer):
         self.player.moveDecay = 0.0
         self.player.currentPad = None
         self.player.disabled = False
-        self.player.invincible = True
-        self.collman.add(self.player)
-
+        self.player.invincible = False
 
         self.cnt_pad = 0
         
@@ -370,7 +369,7 @@ class Worldview(cocos.layer.Layer):
         closestPad = None
         
         for child in self.get_children():
-            if child.btype == "pad" and child != exclPad and child.disabled == False:
+            if child.btype == "pad" and child != exclPad and child.disabled == False and child.spinning == False:
                 padPoint = eu.Point2(child.position[0], child.position[1])
                 
                 # check angles to make sure it's ahead of us
@@ -423,6 +422,9 @@ class Worldview(cocos.layer.Layer):
         
     def enablePad(self, pad):
         pad.disabled = False
+        
+    def stopPadSpinning(self, pad):
+        pad.spinning = False
         
     def showMessageOnPad(self, pad):
         self.lastCompliment = random.choice(self.compliments)
@@ -504,6 +506,45 @@ class Worldview(cocos.layer.Layer):
 
         self.player.vel = newVel
         self.player.update_center(newPos)        
+        
+    def updateRadarSwipe(self, dt):
+        self.swipeDecay -= dt
+        if self.swipeDecay < 0.0:
+            
+            self.swipeDecay = 0.2
+            
+            self.swipeAngle -= 3.0
+            if self.swipeAngle < 0:
+                self.swipeAngle += 360
+                self.swipePads = [x for x in self.get_children() if x.btype == "pad" and x.disabled == False]
+                
+            padsToRemove = []
+            w, h = director.get_window_size()
+            origin = eu.Point2(0.5 * w, 0.5 * h)
+            rightOfOrigin = eu.Point2(origin.x + 600.0, origin.y)
+            # startVector = (rightOfOrigin - origin).normalize()
+            # startVector = startVector.rotate(math.radians(self.swipeAngle))
+            endPoint = self.rotatePoint(rightOfOrigin, origin, self.swipeAngle)
+            
+            #print("testing pads", len(self.swipePads), "at angle", self.swipeAngle)
+            swipeLine = eu.LineSegment2(origin, endPoint)
+            
+            # line = draw.Line((swipeLine.p1.x, swipeLine.p1.y), (swipeLine.p2.x, swipeLine.p2.y), (255, 255, 255, 255))
+            # line.btype = "line"
+            # self.add(line)
+            
+            for pad in self.swipePads:
+                circle = eu.Circle(eu.Point2(pad.position[0], pad.position[1]), 8.0)
+                if swipeLine.intersect(circle) != None and not pad.specialTriggered:
+                    padsToRemove.append(pad)
+                    pad.spinning = True
+                    pad.do(ac.FadeOut(0.2) + ac.Delay(1.5) + ac.FadeIn(0.2) + ac.CallFuncS(self.stopPadSpinning))
+            
+            for pad in padsToRemove:
+                self.swipePads.remove(pad)
+                    
+            
+
 
     def update(self, dt):
         # if not playing dont update model
@@ -512,27 +553,7 @@ class Worldview(cocos.layer.Layer):
                 self.updatePlayerFlyingWin(dt)
             return
 
-        # update collman
-        # self.collman.clear()
-        # for z, node in self.children:
-        #     self.collman.add(node)
-
-        # interactions player - others
-        for other in self.collman.iter_colliding(self.player):
-            typeball = other.btype
-            # if typeball == 'pad':
-            #     self.toRemove.add(other)
-            #     self.cnt_pad -= 1
-            #     if not self.cnt_pad:
-            #         self.open_gate()
-            #
-            # elif (typeball == 'wall' or
-            #       typeball == 'gate' and self.cnt_pad > 0):
-            #     self.level_losed()
-            #
-            # elif typeball == 'gate':
-            #     self.level_conquered()
-
+        self.updateRadarSwipe(dt)
 
         # check distances to the special pads
         if self.specialPadMessageDecay > 0.0:
@@ -596,7 +617,8 @@ class Worldview(cocos.layer.Layer):
                         
                         padsUntriggered = [p for p in self.specialPads if p.specialTriggered == False]
                         if len(padsUntriggered) == 0:
-                            self.level_complete()
+                            self.do(ac.Delay(3) + ac.CallFunc(self.level_complete))
+                            #self.level_complete()
                     
                 else:                
                     nearestPad.do(ac.Delay(0.8) + ac.CallFuncS(self.startPadJitter)) #+ ac.Delay(1) + ac.CallFuncS(self.endDisablePad))
@@ -616,11 +638,6 @@ class Worldview(cocos.layer.Layer):
         playerWorldPos = view_to_world(self.player.position[0], self.player.position[1])
         self.player.cshape.center = eu.Vector2(playerWorldPos[0], playerWorldPos[1])
 
-        # at end of frame do removes; as collman is fully regenerated each frame
-        # theres no need to update it here.
-        for node in self.toRemove:
-            self.remove(node)
-        self.toRemove.clear()
 
     def open_gate(self):
         self.gate.color = Actor.palette['gate']
